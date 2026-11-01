@@ -59,8 +59,7 @@ Without proper concurrency handling, this can result in:
 
 ## 5. System Architecture
 
-*(Insert your Architecture Diagram image here from the `docs/` folder)*
-![System Architecture](docs/architecture.png)
+![System Architecture](docs/architecture.svg)
 
 The system routes traffic through an AWS ALB Ingress Controller. The `Auth Service` handles identity and issues a JWT. The `Booking Service` intercepts requests, validates the JWT statelessly using a shared secret, and interacts with the MySQL database using Pessimistic Write Locks to secure ticket inventory.
 
@@ -90,6 +89,69 @@ The system routes traffic through an AWS ALB Ingress Controller. The `Auth Servi
 1. Ensure your AWS CLI is configured and `kubectl` is mapped to your EKS cluster.
 2. Update the AWS Account ID and Region in `./scripts/build_and_push_aws.sh`.
 3. Run the script to build, tag, and push Docker images to AWS ECR and apply the K8s manifests:
-   ```bash
-   chmod +x ./scripts/build_and_push_aws.sh
-   ./scripts/build_and_push_aws.sh
+    ```bash
+    chmod +x ./scripts/build_and_push_aws.sh
+    ./scripts/build_and_push_aws.sh
+    ```
+
+---
+
+## 8. Concurrency Post-Mortem
+
+EventHive was stress-tested with simultaneous seat-reservation requests to validate correctness under flash-sale conditions.
+
+### 8.1 Deadlock Elimination (MySQL Error 1213)
+Concurrent multi-seat bookings could deadlock when two transactions each held row locks the other was waiting for. The fix enforces a **deterministic ascending sort order on ticket IDs** before acquiring locks:
+
+```python
+ordered_ids = sorted(list(set(ticket_ids)))
+
+with transaction.atomic():
+    locked_tickets = list(
+        Ticket.objects.select_for_update().filter(id__in=ordered_ids)
+    )
+```
+
+Because every transaction acquires row locks in the same order (lowest ID → highest ID), a circular lock-wait graph cannot form, and deadlock 1213 is eliminated.
+
+### 8.2 Pessimistic Locking vs. Double-Booking
+Without locking, a read-then-write race allows two users to both see a seat as `AVAILABLE` and both book it. `select_for_update()` takes a **pessimistic write lock** on the selected rows inside an atomic transaction, guaranteeing that only one requester can pass the availability check.
+
+### 8.3 Serialization Recursion
+DRF nested serializers can recurse infinitely when a model references itself or when related objects are serialized in both directions. The fix decouples domain models from presentation DTOs: `TicketSerializer` and `EventSerializer` expose only the fields needed by clients, avoiding circular references between `Event.tickets` and `Ticket.event`.
+
+### 8.4 Ingress Subpath Preservation
+The nginx `rewrite-target: /$2` annotation was dropping the `/api/` prefix, causing 404s on nested routes. The Ingress path regex was updated to `/auth(/|$)(.*)` and `/booking(/|$)(.*)` so the matched suffix is preserved and forwarded to the services.
+
+---
+
+## 9. Setup Guide
+
+### Prerequisites
+- Python 3.11+
+- Docker & Docker Compose (for local) or Minikube (for K8s)
+- `kubectl` configured against a cluster (Minikube or EKS)
+
+### Local Development (Docker Compose)
+```bash
+docker compose build
+docker compose up -d
+docker compose exec booking_service python booking_service/manage.py init_data
+```
+- Auth API: `http://localhost:8001`
+- Booking API: `http://localhost:8002`
+
+### Kubernetes (Minikube)
+```bash
+minikube start --driver=docker
+minikube addons enable ingress
+./scripts/build_and_deploy.sh
+```
+Map `eventhive.local` to your Minikube IP in `/etc/hosts`.
+
+### Running the Concurrency Benchmark
+```bash
+pip install requests
+python tests/test_concurrency_bench.py
+```
+The benchmark issues two simultaneous POSTs to `/api/book/` for the same seat; exactly one should succeed (HTTP 201) and the other should fail (HTTP 400).
