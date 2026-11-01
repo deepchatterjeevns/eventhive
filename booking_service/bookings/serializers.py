@@ -6,15 +6,22 @@ class TicketSerializer(serializers.ModelSerializer):
         model = Ticket
         fields = ['id', 'seat_number', 'status', 'price']
 
-class EventSerializer(serializers.ModelSerializer):
+class BookingResponseSerializer(serializers.ModelSerializer):
     tickets = TicketSerializer(many=True, read_only=True)
 
     class Meta:
-        model = Event
-        fields = ['id', 'name', 'venue', 'event_date', 'total_seats', 'tickets']
+        model = Booking
+        fields = ['id', 'user_id', 'total_amount', 'status', 'created_at', 'tickets']
 
 class BookingRequestSerializer(serializers.Serializer):
     ticket_ids = serializers.ListField(
         child=serializers.IntegerField(),
         allow_empty=False
     )
+
+class EventSerializer(serializers.ModelSerializer):
+    tickets = TicketSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Event
+        fields = ['id', 'name', 'venue', 'event_date', 'total_seats', 'tickets']
