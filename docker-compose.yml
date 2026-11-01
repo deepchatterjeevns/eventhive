@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: eventhive-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: eventhive_db
+    ports:
+      - "3306:3306"
+
+  auth_service:
+    build: ./auth_service
+    container_name: eventhive-auth
+    environment:
+      - DB_HOST=mysql
+      - DB_PASSWORD=rootpassword
+    ports:
+      - "8001:8000"
+    depends_on:
+      - mysql
+
+  booking_service:
+    build: ./booking_service
+    container_name: eventhive-booking
+    environment:
+      - DB_HOST=mysql
+      - DB_PASSWORD=rootpassword
+    ports:
+      - "8002:8000"
+    depends_on:
+      - mysql
