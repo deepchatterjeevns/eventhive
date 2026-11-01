@@ -10,7 +10,7 @@ down:
 	docker compose down -v
 
 seed:
-	docker compose exec booking_service python manage.py init_data
+	docker compose exec booking_service python booking_service/manage.py init_data
 
 test-concurrency:
 	python tests/test_concurrency_bench.py

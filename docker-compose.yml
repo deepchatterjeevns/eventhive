@@ -9,6 +9,8 @@ services:
       MYSQL_DATABASE: eventhive_db
     ports:
       - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
 
   auth_service:
     build: ./auth_service
@@ -16,6 +18,9 @@ services:
     environment:
       - DB_HOST=mysql
       - DB_PASSWORD=rootpassword
+      - DB_NAME=eventhive_db
+      - DB_USER=root
+      - DB_PORT=3306
     ports:
       - "8001:8000"
     depends_on:
@@ -27,7 +32,13 @@ services:
     environment:
       - DB_HOST=mysql
       - DB_PASSWORD=rootpassword
+      - DB_NAME=eventhive_db
+      - DB_USER=root
+      - DB_PORT=3306
     ports:
       - "8002:8000"
     depends_on:
       - mysql
+
+volumes:
+  mysql_data:

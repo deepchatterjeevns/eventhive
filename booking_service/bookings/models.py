@@ -28,7 +28,12 @@ class Ticket(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('event', 'seat_number')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'seat_number'],
+                name='unique_event_seat',
+            )
+        ]
 
     def __str__(self):
         return f"Event {self.event_id} | Seat {self.seat_number} | {self.status}"
