@@ -1,74 +1,78 @@
+import time
 from decimal import Decimal
-from django.db import transaction
+
+from django.db import DatabaseError, transaction
 from rest_framework.exceptions import ValidationError
-from .models import Ticket, Booking, TicketStatus
+
+from .models import Booking, Ticket, TicketStatus
 
 
 class BookingService:
+    # MySQL can still report a lock-wait deadlock under heavy contention; a short
+    # retry lets the loser of the race re-read committed state and fail cleanly.
+    DEADLOCK_RETRIES = 3
+    RETRY_BACKOFF_SECONDS = 0.05
+
     @staticmethod
     def reserve_tickets(user_id: int, ticket_ids: list[int]) -> Booking:
         """
         Reserves seats atomically with database row-level locking.
-        
-        Fix for Deadlock (1213):
-        Enforces a deterministic ascending sort order on ticket IDs. 
-        When all concurrent transactions acquire row locks in the exact same 
-        order (lowest ID to highest ID), a circular lock-wait graph cannot form.
+
+        Deadlock (MySQL 1213) handling:
+        1. Requested IDs are de-duplicated and sorted ascending.
+        2. The locking query is issued with an explicit ORDER BY id so InnoDB
+           walks the PRIMARY index and therefore acquires row locks in
+           ascending PK order for every transaction. A circular wait cannot form.
+        3. Lock-wait/deadlock errors are retried a bounded number of times.
         """
         if not ticket_ids:
             raise ValidationError("ticket_ids list cannot be empty.")
 
-        # 1. Deduplicate and sort IDs to eliminate deadlock cycles
-        ordered_ids = sorted(list(set(ticket_ids)))
+        ordered_ids = sorted(set(ticket_ids))
 
-        with transaction.atomic():
-            # 2. Acquire pessimistic write lock in sorted order
-            locked_tickets = list(
-                Ticket.objects.select_for_update()
-                .filter(id__in=ordered_ids)
-            )
-
-            # 3. Ensure all requested tickets exist
-            if len(locked_tickets) != len(ordered_ids):
-                raise ValidationError("One or more selected tickets do not exist.")
-
-            # 4. Verify all seats are currently AVAILABLE
-            for ticket in locked_tickets:
-                if ticket.status != TicketStatus.AVAILABLE:
+        for attempt in range(1, BookingService.DEADLOCK_RETRIES + 1):
+            try:
+                return BookingService._reserve_once(user_id, ordered_ids)
+            except DatabaseError as exc:
+                if not BookingService._is_lock_error(exc) or attempt == BookingService.DEADLOCK_RETRIES:
                     raise ValidationError(
-                        f"Seat {ticket.seat_number} is already taken or locked!"
-                    )
+                        "Seat reservation failed under contention. Please retry."
+                    ) from exc
+                time.sleep(BookingService.RETRY_BACKOFF_SECONDS * attempt)
 
-            # 5. Compute total amount
-            total_amount = sum((t.price for t in locked_tickets), Decimal('0.00'))
-
-            # 6. Create booking record
-            booking = Booking.objects.create(
-                user_id=user_id,
-                total_amount=total_amount,
-                status=Booking.BookingStatus.CONFIRMED,
-            )
-
-            # 7. Update ticket statuses to BOOKED
-            for ticket in locked_tickets:
-                ticket.status = TicketStatus.BOOKED
-                ticket.save(update_fields=['status', 'updated_at'])
-                booking.tickets.add(ticket)
-
-        return booking
+        raise ValidationError("Seat reservation failed. Please retry.")
 
     @staticmethod
-    def reserve_tickets_naive(user_id: int, ticket_ids: list[int]) -> Booking:
-        """
-        Retained as a baseline control method for benchmarking against race conditions.
-        """
-        tickets = Ticket.objects.filter(id__in=ticket_ids)
+    def _is_lock_error(exc: DatabaseError) -> bool:
+        """Detect MySQL deadlock (1213) and lock-wait timeout (1205)."""
+        args = getattr(exc, "args", ())
+        errno = args[0] if args and isinstance(args[0], int) else None
+        if errno in (1213, 1205):
+            return True
+        return "Deadlock found" in str(exc) or "Lock wait timeout" in str(exc)
 
-        for ticket in tickets:
+    @staticmethod
+    @transaction.atomic
+    def _reserve_once(user_id: int, ordered_ids: list[int]) -> Booking:
+        # Acquire pessimistic write locks in ascending primary-key order.
+        locked_tickets = list(
+            Ticket.objects.select_for_update().filter(id__in=ordered_ids).order_by("id")
+        )
+
+        if len(locked_tickets) != len(ordered_ids):
+            raise ValidationError("One or more selected tickets do not exist.")
+
+        # Re-check ordering defensively: locks are held, so a stable sequence is
+        # guaranteed for the update phase below.
+        locked_tickets.sort(key=lambda ticket: ticket.id)
+
+        for ticket in locked_tickets:
             if ticket.status != TicketStatus.AVAILABLE:
-                raise ValidationError(f"Seat {ticket.seat_number} is already booked!")
+                raise ValidationError(
+                    f"Seat {ticket.seat_number} is already taken or locked!"
+                )
 
-        total_amount = sum((t.price for t in tickets), Decimal('0.00'))
+        total_amount = sum((ticket.price for ticket in locked_tickets), Decimal("0.00"))
 
         booking = Booking.objects.create(
             user_id=user_id,
@@ -76,9 +80,38 @@ class BookingService:
             status=Booking.BookingStatus.CONFIRMED,
         )
 
-        for ticket in tickets:
+        for ticket in locked_tickets:
             ticket.status = TicketStatus.BOOKED
-            ticket.save()
-            booking.tickets.add(ticket)
+            ticket.save(update_fields=["status", "updated_at"])
+
+        booking.tickets.add(*locked_tickets)
+
+        return booking
+
+    @staticmethod
+    def reserve_tickets_naive(user_id: int, ticket_ids: list[int]) -> Booking:
+        """
+        Retained as a baseline control method for benchmarking against race
+        conditions. Not wired to any endpoint: never call this from a view.
+        """
+        with transaction.atomic():
+            tickets = list(Ticket.objects.filter(id__in=ticket_ids))
+
+            for ticket in tickets:
+                if ticket.status != TicketStatus.AVAILABLE:
+                    raise ValidationError(f"Seat {ticket.seat_number} is already booked!")
+
+            total_amount = sum((ticket.price for ticket in tickets), Decimal("0.00"))
+
+            booking = Booking.objects.create(
+                user_id=user_id,
+                total_amount=total_amount,
+                status=Booking.BookingStatus.CONFIRMED,
+            )
+
+            for ticket in tickets:
+                ticket.status = TicketStatus.BOOKED
+                ticket.save()
+                booking.tickets.add(ticket)
 
         return booking
