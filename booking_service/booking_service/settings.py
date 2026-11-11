@@ -3,20 +3,31 @@ Django settings for booking_service project.
 """
 from pathlib import Path
 import os
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get(
-    'SECRET_KEY',
-    'django-insecure-dev-secret-key-change-in-production-0123456789'
-)
-
 DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = ['*']
+# In production a real SECRET_KEY must be supplied; never fall back to a dev default.
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'dev-insecure-key-scaler-capstone-9923847291'
+    else:
+        raise ImproperlyConfigured('SECRET_KEY must be set when DEBUG is False.')
+
+# Must match the auth service's signing key so Bearer tokens verify statelessly.
+JWT_SIGNING_KEY = os.environ.get('JWT_SIGNING_KEY') or SECRET_KEY
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -87,10 +98,13 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES': (
+    'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
-    ),
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework.authentication.SessionAuthentication',
-    ),
+    ],
+    # Stateless JWT verification is performed by bookings.auth_client against the
+    # shared signing key; Django session auth is intentionally not enabled here.
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
 }
+
+# Cap request size so the concurrency benchmark cannot be used to exhaust memory.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 262144
