@@ -6,8 +6,8 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
       MYSQL_DATABASE: ${DB_NAME:-eventhive_db}
     command: --default-authentication-plugin=mysql_native_password
-    ports:
-      - "3306:3306"
+    # Host port 3306 intentionally unmapped (Windows Docker port-bind race);
+    # services reach MySQL via the docker network hostname "mysql".
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
