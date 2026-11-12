@@ -1,71 +1,48 @@
+from dataclasses import dataclass
 import jwt
 from django.conf import settings
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
 
-class AuthenticatedUser:
-    """Lightweight stand-in for request.user used by stateless JWT auth.
+@dataclass
+class AuthenticatedTokenUser:
+    id: int
 
-    The booking service owns no user table, so the identity carried by the
-    token is deliberately unmanaged: only what the JWT asserts is available.
-    """
-
-    def __init__(self, user_id):
-        self.id = user_id
-        self.user_id = user_id
-        self.pk = user_id
-        self.is_authenticated = True
-        self.is_active = True
-        self.is_anonymous = False
-
-    def __str__(self):
-        return f"User {self.user_id}"
+    @property
+    def is_authenticated(self) -> bool:
+        return True
 
 
 class StatelessJWTAuthentication(BaseAuthentication):
-    """Verifies Bearer tokens issued by the auth service.
-
-    Both services must be configured with the same JWT_SIGNING_KEY, otherwise
-    tokens signed by the auth service cannot be verified here.
     """
-
-    keyword = "Bearer"
+    Stateless DRF authentication backend that verifies HMAC-SHA256 JWTs
+    signed by auth_service using JWT_SIGNING_KEY (with fallback to SECRET_KEY).
+    Enforces expiration ('exp') and rejects refresh tokens ('token_type' != 'access').
+    """
 
     def authenticate(self, request):
         auth_header = request.headers.get("Authorization")
-        if not auth_header:
-            # Absence of credentials is not an error: public endpoints stay open
-            # and permission classes decide whether the request may proceed.
+        if not auth_header or not auth_header.startswith("Bearer "):
             return None
 
-        parts = auth_header.split()
-        if len(parts) != 2 or parts[0] != self.keyword:
-            raise AuthenticationFailed("Missing or malformed Authorization header")
-
+        token = auth_header.split(" ", 1)[1].strip()
         signing_key = getattr(settings, "JWT_SIGNING_KEY", settings.SECRET_KEY)
+
         try:
             payload = jwt.decode(
-                parts[1],
+                token,
                 signing_key,
                 algorithms=["HS256"],
-                options={"require": ["exp"]},
+                options={"require": ["exp", "user_id"]},
             )
-        except jwt.ExpiredSignatureError:
-            raise AuthenticationFailed("Access token has expired")
-        except jwt.InvalidTokenError:
-            raise AuthenticationFailed("Invalid authorization token")
+        except jwt.ExpiredSignatureError as exc:
+            raise AuthenticationFailed("Access token has expired.") from exc
+        except jwt.InvalidTokenError as exc:
+            raise AuthenticationFailed("Invalid authorization token.") from exc
 
-        user_id = payload.get("user_id")
-        if user_id is None:
-            raise AuthenticationFailed("Token does not contain a user_id")
+        token_type = payload.get("token_type", "access")
+        if token_type != "access":
+            raise AuthenticationFailed("Invalid token type: access token required.")
 
-        try:
-            user_id = int(user_id)
-        except (TypeError, ValueError):
-            raise AuthenticationFailed("Token contains an invalid user_id")
-
-        return AuthenticatedUser(user_id), parts[1]
-
-    def authenticate_header(self, request):
-        return self.keyword
+        return (AuthenticatedTokenUser(id=int(payload["user_id"])), payload)
