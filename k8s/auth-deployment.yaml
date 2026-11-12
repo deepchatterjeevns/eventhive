@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: auth-service
+  labels:
+    app: auth-service
 spec:
   replicas: 1
   selector:
@@ -17,18 +19,52 @@ spec:
           image: eventhive-auth:latest
           imagePullPolicy: Never
           ports:
-            - containerPort: 8000
+            - name: http
+              containerPort: 8000
           env:
-            - name: DB_HOST
-              value: "mysql"
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: SECRET_KEY
+            - name: JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: JWT_SIGNING_KEY
             - name: DB_PASSWORD
-              value: "rootpassword"
-            - name: DB_NAME
-              value: "eventhive_db"
-            - name: DB_USER
-              value: "root"
-            - name: DB_PORT
-              value: "3306"
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: DB_PASSWORD
+          envFrom:
+            - configMapRef:
+                name: eventhive-config
+          startupProbe:
+            httpGet:
+              path: /api/health/
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /api/health/
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health/
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "192Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
 ---
 apiVersion: v1
 kind: Service
@@ -38,6 +74,7 @@ spec:
   selector:
     app: auth-service
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 8001
       targetPort: 8000

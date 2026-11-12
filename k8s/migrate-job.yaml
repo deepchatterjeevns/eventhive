@@ -1,0 +1,75 @@
+# One-shot schema bootstrap, applied before the Deployments so the two services
+# never race each other's migrate.
+# Re-apply after changing models: kubectl apply -f k8s/migrate-job.yaml
+# (delete the old Job first: kubectl delete job eventhive-migrate --ignore-not-found)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eventhive-migrate
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: eventhive-migrate
+    spec:
+      restartPolicy: Never
+      initContainers:
+        # Both services share one MySQL instance, so each project migrates its
+        # own app tables under its own app label.
+        - name: migrate-auth
+          image: eventhive-auth:latest
+          imagePullPolicy: Never
+          command: ["sh", "-c", "until python manage.py migrate --noinput; do sleep 5; done"]
+          envFrom:
+            - configMapRef:
+                name: eventhive-config
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: SECRET_KEY
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: DB_PASSWORD
+        - name: migrate-booking
+          image: eventhive-booking:latest
+          imagePullPolicy: Never
+          command: ["sh", "-c", "until python manage.py migrate --noinput; do sleep 5; done"]
+          envFrom:
+            - configMapRef:
+                name: eventhive-config
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: SECRET_KEY
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: DB_PASSWORD
+      containers:
+        - name: seed
+          image: eventhive-booking:latest
+          imagePullPolicy: Never
+          command: ["sh", "-c", "python manage.py init_data"]
+          envFrom:
+            - configMapRef:
+                name: eventhive-config
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: SECRET_KEY
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: DB_PASSWORD

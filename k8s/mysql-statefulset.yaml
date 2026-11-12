@@ -3,18 +3,20 @@ kind: Service
 metadata:
   name: mysql
 spec:
-  ports:
-    - port: 3306
+  clusterIP: None
   selector:
     app: mysql
-  clusterIP: None
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: mysql
 spec:
-  serviceName: "mysql"
+  serviceName: mysql
   replicas: 1
   selector:
     matchLabels:
@@ -27,13 +29,36 @@ spec:
       containers:
         - name: mysql
           image: mysql:8.0
+          args:
+            - --default-authentication-plugin=mysql_native_password
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: "rootpassword"
+              valueFrom:
+                secretKeyRef:
+                  name: eventhive-secrets
+                  key: DB_PASSWORD
             - name: MYSQL_DATABASE
               value: "eventhive_db"
           ports:
-            - containerPort: 3306
+            - name: mysql
+              containerPort: 3306
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "127.0.0.1"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: mysql
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
           volumeMounts:
             - name: mysql-data
               mountPath: /var/lib/mysql
