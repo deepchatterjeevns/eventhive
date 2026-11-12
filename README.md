@@ -61,6 +61,14 @@ Without proper concurrency handling, this can result in:
 
 ![System Architecture](docs/architecture.svg)
 
+### High-Level Design (Production)
+
+![High-Level Design](docs/eventhive_hld.png)
+
+### Microservice Boundaries & Data Ownership
+
+![Microservices Breakdown](docs/eventhive_microservices.png)
+
 The system routes traffic through an AWS ALB Ingress Controller. The `Auth Service` handles identity and issues a JWT. The `Booking Service` intercepts requests, validates the JWT statelessly using a shared secret, and interacts with the MySQL database using Pessimistic Write Locks to secure ticket inventory.
 
 ---
@@ -97,6 +105,8 @@ The system routes traffic through an AWS ALB Ingress Controller. The `Auth Servi
 ---
 
 ## 8. Concurrency Post-Mortem
+
+![Concurrency Locking Sequence](docs/eventhive_concurrency.png)
 
 EventHive was stress-tested with simultaneous seat-reservation requests to validate correctness under flash-sale conditions.
 
