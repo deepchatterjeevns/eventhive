@@ -29,17 +29,10 @@ class BookTicketView(APIView):
     def post(self, request):
         serializer = BookingRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        strategy = request.query_params.get("strategy", "pessimistic")
-        ticket_ids = serializer.validated_data["ticket_ids"]
-
-        if strategy == "naive":
-            booking = BookingService.reserve_tickets_naive(request.user.id, ticket_ids)
-        elif strategy == "cas":
-            booking = BookingService.reserve_tickets_cas(request.user.id, ticket_ids)
-        else:
-            booking = BookingService.reserve_tickets(request.user.id, ticket_ids)
-
+        booking = BookingService.reserve_tickets(
+            user_id=request.user.id,
+            ticket_ids=serializer.validated_data["ticket_ids"],
+        )
         return Response(
             BookingResponseSerializer(booking).data,
             status=status.HTTP_201_CREATED,
