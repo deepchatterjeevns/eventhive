@@ -24,7 +24,8 @@ check:
 	cd booking_service && python manage.py makemigrations --check --dry-run
 
 test-concurrency:
-	python tests/test_concurrency_bench.py
+	docker cp tests/bench_concurrency.py eventhive-booking:/app/bench_concurrency.py
+	docker compose exec booking_service python bench_concurrency.py --threads 50 --rounds 6
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
