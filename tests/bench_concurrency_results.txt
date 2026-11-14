@@ -1,0 +1,22 @@
+MySQL=8.0.46 | Isolation=READ-COMMITTED | Threads=50 | Rounds=6 | CPUs=20
+
+--- Scenario: single (300 attempts) ---
+Strategy                   | Oversold | Wins  | Rejects | Deadlocks(App/DB) | P50 ms  | P95 ms
+naive                      |      292 |   298 |       2 | 0 / 0             |   636.1 |   806.1
+optimistic_cas             |        0 |     6 |     294 | 0 / 0             |    68.5 |    80.8
+pessimistic_unsorted_loop  |        0 |     6 |     294 | 0 / 0             |    42.8 |    61.7
+pessimistic_production     |        0 |     6 |     294 | 0 / 0             |    43.3 |    56.4
+
+--- Scenario: opposite (300 attempts) ---
+Strategy                   | Oversold | Wins  | Rejects | Deadlocks(App/DB) | P50 ms  | P95 ms
+naive                      |      586 |   299 |       1 | 0 / 0             |  1048.6 |  1189.2
+optimistic_cas             |        0 |     6 |     294 | 0 / 0             |    69.1 |    81.0
+pessimistic_unsorted_loop  |        0 |     6 |     136 | 158 / 158         |    61.5 |    83.5
+pessimistic_production     |        0 |     6 |     294 | 0 / 0             |    45.0 |    58.9
+
+--- Scenario: mixed (300 attempts) ---
+Strategy                   | Oversold | Wins  | Rejects | Deadlocks(App/DB) | P50 ms  | P95 ms
+naive                      |      562 |   299 |       1 | 0 / 0             |   430.2 |   548.6
+optimistic_cas             |        0 |    18 |     282 | 0 / 0             |    80.8 |   100.6
+pessimistic_unsorted_loop  |        0 |    18 |     245 | 37 / 37           |    81.9 |   105.6
+pessimistic_production     |        0 |    18 |     282 | 0 / 0             |    60.2 |    83.3
