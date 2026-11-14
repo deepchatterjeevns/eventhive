@@ -48,7 +48,7 @@ docker compose exec booking_service python bench_concurrency.py --threads 50 --r
 ```
 
 ### Measured Results (50 Simultaneous Threads × 6 Rounds = 300 Attempts / Cell, MySQL 8.0.46)
-- **No Lock (`naive`):** `138 / 300` overbooked seats (`single` scenario) and `278 / 300` overbooked (`opposite` `[a, b]` / `[b, a]` scenario).
-- **Optimistic CAS (`optimistic_cas`):** `0` overbooked seats, `0` deadlocks, `P95 = 183.2 ms`.
-- **Pessimistic Row-by-Row Unsorted (`pessimistic_loop_unsorted`):** `0` overbooked seats, **`156` InnoDB deadlocks** in `opposite` (`[a, b]` vs. `[b, a]`) contention (`P95 = 201.9 ms`).
-- **EventHive Production (`BookingService.reserve_tickets` — `select_for_update().order_by("id")` + retry):** **`0` overbooked seats, `0` deadlocks (`0` masked), `P95 = 161.4 ms` (`single`) / `149.2 ms` (`opposite`)**.
+- **No Lock (`naive`):** `294 / 300` oversold seats (`single` scenario; 6 legitimate wins) and `588` oversold seat-assignments (`opposite` `[a, b]` / `[b, a]` scenario).
+- **Optimistic CAS (`optimistic_cas`):** `0` oversold seats, `0` deadlocks, `P95 = 61.2 ms` (`single`) / `72.6 ms` (`opposite`).
+- **Pessimistic Row-by-Row Unsorted (`pessimistic_loop_unsorted`):** `0` oversold seats, **`149` InnoDB deadlocks** in `opposite` (`[a, b]` vs. `[b, a]`) contention (`P95 = 64.6 ms`).
+- **EventHive Production (`BookingService.reserve_tickets` — `select_for_update().order_by("id")` + retry):** **`0` oversold seats, `0` deadlocks (`0` masked), `P95 = 47.9 ms` (`single`) / `48.7 ms` (`opposite`) / `58.7 ms` (`mixed`)**.
