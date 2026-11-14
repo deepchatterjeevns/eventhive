@@ -50,6 +50,6 @@ docker compose exec booking_service python bench_concurrency.py --threads 50 --r
 ### Measured Results (50 Simultaneous Threads × 6 Rounds = 300 Attempts / Cell, MySQL 8.0.46)
 - **No Lock (`naive`):** `284 / 300` oversold seats (`single` scenario) and `586` oversold seat-assignments (`opposite` `[a, b]` / `[b, a]` scenario).
 - **Optimistic CAS (`optimistic_cas`):** `0` oversold seats, `0` deadlocks, `P95 = 75.1 ms` (`single`) / `96.5 ms` (`opposite`) / `116.2 ms` (`mixed`).
-- **Pessimistic Single `IN` Unsorted (`pessimistic_in_unsorted`):** `0` oversold seats, `0` deadlocks (`P95 = 48.8 ms` / `56.0 ms` / `82.5 ms`), confirming InnoDB scans primary keys in ascending index order.
+- **Pessimistic Single `IN` Unsorted (`pessimistic_in_unsorted`):** `0` oversold seats, `0` deadlocks (`P95 = 48.8 ms` / `56.0 ms` / `82.5 ms`), consistent with InnoDB scanning primary keys in ascending order.
 - **Pessimistic Row-by-Row Unsorted (`pessimistic_unsorted_loop`):** `0` oversold seats, **`151` InnoDB deadlocks** in `opposite` (`[a, b]` vs. `[b, a]`) and **`38` deadlocks** in `mixed` (`P95 = 82.4 ms` / `107.5 ms`).
 - **EventHive Production (`pessimistic_production` — `select_for_update().order_by("id")` + retry):** **`0` oversold seats, `0` deadlocks, `0` errors, `P95 = 57.2 ms` (`single`) / `67.5 ms` (`opposite`) / `77.1 ms` (`mixed`)**.
