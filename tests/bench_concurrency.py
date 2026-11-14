@@ -35,20 +35,12 @@ def get_innodb_deadlocks() -> int:
             "SELECT `COUNT` FROM information_schema.INNODB_METRICS WHERE NAME = 'lock_deadlocks'"
         )
         row = cursor.fetchone()
-        return int(row[0]) if row else 0
+        if row is None:
+            raise RuntimeError("INNODB_METRICS 'lock_deadlocks' row not found in MySQL.")
+        return int(row[0])
 
 
-@transaction.atomic
-def lock_row_by_row_unsorted(user_id: int, ticket_ids: list[int]) -> Booking:
-    """Locks seats one query at a time in caller order to demonstrate deadlock risk."""
-    ordered_unique = list(dict.fromkeys(ticket_ids))
-    tickets = []
-    for tid in ordered_unique:
-        try:
-            tickets.append(Ticket.objects.select_for_update().get(pk=tid))
-        except Ticket.DoesNotExist as exc:
-            raise ValidationError("Ticket does not exist.") from exc
-
+def _commit_tickets(user_id: int, tickets: list[Ticket]) -> Booking:
     for ticket in tickets:
         if ticket.status != TicketStatus.AVAILABLE:
             raise SeatConflictError(f"Seat {ticket.seat_number} is already booked.")
@@ -66,9 +58,37 @@ def lock_row_by_row_unsorted(user_id: int, ticket_ids: list[int]) -> Booking:
     return booking
 
 
+@transaction.atomic
+def lock_single_in_unsorted(user_id: int, ticket_ids: list[int]) -> Booking:
+    """Single WHERE id IN (...) FOR UPDATE query without ORDER BY id (caller order)."""
+    ordered_unique = list(dict.fromkeys(ticket_ids))
+    tickets = list(
+        Ticket.objects.select_for_update()
+        .filter(id__in=ordered_unique)
+        .order_by()
+    )
+    if len(tickets) != len(ordered_unique):
+        raise ValidationError("One or more tickets do not exist.")
+    return _commit_tickets(user_id, tickets)
+
+
+@transaction.atomic
+def lock_row_by_row_unsorted(user_id: int, ticket_ids: list[int]) -> Booking:
+    """Locks seats one query at a time in caller order to demonstrate deadlock risk."""
+    ordered_unique = list(dict.fromkeys(ticket_ids))
+    tickets = []
+    for tid in ordered_unique:
+        try:
+            tickets.append(Ticket.objects.select_for_update().get(pk=tid))
+        except Ticket.DoesNotExist as exc:
+            raise ValidationError("Ticket does not exist.") from exc
+    return _commit_tickets(user_id, tickets)
+
+
 STRATEGIES = {
     "naive": BookingService.reserve_tickets_naive,
     "optimistic_cas": BookingService.reserve_tickets_cas,
+    "pessimistic_in_unsorted": lock_single_in_unsorted,
     "pessimistic_unsorted_loop": lock_row_by_row_unsorted,
     "pessimistic_production": BookingService.reserve_tickets,
 }
@@ -120,6 +140,7 @@ def run_case(strategy_name: str, scenario: str, threads: int, rounds: int, seed:
     wins = 0
     rejects = 0
     deadlocks = 0
+    errors = 0
     oversold = 0
     latencies_ms = []
     user_seq = TEST_USER_START
@@ -145,6 +166,8 @@ def run_case(strategy_name: str, scenario: str, threads: int, rounds: int, seed:
                     except DatabaseError as db_err:
                         errno = db_err.args[0] if db_err.args else None
                         status = "deadlock" if errno == 1213 else "error"
+                    except Exception:
+                        status = "error"
                     elapsed_ms = (time.perf_counter() - t0) * 1000.0
                     return status, elapsed_ms
                 finally:
@@ -164,8 +187,9 @@ def run_case(strategy_name: str, scenario: str, threads: int, rounds: int, seed:
                     rejects += 1
                 elif status == "deadlock":
                     deadlocks += 1
+                else:
+                    errors += 1
 
-            # Audit actual join table duplicates for this round's seats
             dup_rows = (
                 Booking.tickets.through.objects.filter(ticket_id__in=seat_ids)
                 .values("ticket_id")
@@ -175,6 +199,11 @@ def run_case(strategy_name: str, scenario: str, threads: int, rounds: int, seed:
     finally:
         Booking.objects.filter(user_id__gte=TEST_USER_START).delete()
         Event.objects.filter(pk=event_id).delete()
+
+    total_attempts = threads * rounds
+    assert wins + rejects + deadlocks + errors == total_attempts, (
+        f"Outcome count mismatch: {wins}+{rejects}+{deadlocks}+{errors} != {total_attempts}"
+    )
 
     deadlocks_after = get_innodb_deadlocks()
     latencies_ms.sort()
@@ -189,6 +218,7 @@ def run_case(strategy_name: str, scenario: str, threads: int, rounds: int, seed:
         "rejects": rejects,
         "app_deadlocks": deadlocks,
         "mysql_deadlocks": deadlocks_after - deadlocks_before,
+        "errors": errors,
         "p50_ms": round(p50, 1),
         "p95_ms": round(p95, 1),
     }
@@ -208,13 +238,17 @@ def main():
     print(f"MySQL={db_ver} | Isolation={iso_level} | Threads={args.threads} | Rounds={args.rounds} | CPUs={os.cpu_count()}")
     for scenario in ("single", "opposite", "mixed"):
         print(f"\n--- Scenario: {scenario} ({args.threads * args.rounds} attempts) ---")
-        print(f"{'Strategy':26s} | {'Oversold':8s} | {'Wins':5s} | {'Rejects':7s} | {'Deadlocks(App/DB)':17s} | {'P50 ms':7s} | {'P95 ms':7s}")
+        print(
+            f"{'Strategy':26s} | {'Oversold':8s} | {'Wins':5s} | {'Rejects':7s} | "
+            f"{'Deadlocks(App/DB)':17s} | {'Errors':6s} | {'P50 ms':7s} | {'P95 ms':7s}"
+        )
         for strat in STRATEGIES:
             res = run_case(strat, scenario, args.threads, args.rounds, args.seed)
             dl_str = f"{res['app_deadlocks']} / {res['mysql_deadlocks']}"
             print(
                 f"{res['strategy']:26s} | {res['oversold']:8d} | {res['wins']:5d} | "
-                f"{res['rejects']:7d} | {dl_str:17s} | {res['p50_ms']:7.1f} | {res['p95_ms']:7.1f}"
+                f"{res['rejects']:7d} | {dl_str:17s} | {res['errors']:6d} | "
+                f"{res['p50_ms']:7.1f} | {res['p95_ms']:7.1f}"
             )
 
 

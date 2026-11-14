@@ -40,7 +40,7 @@ chmod +x scripts/build_and_deploy.sh
 ```
 
 ## Concurrency Benchmark (`tests/bench_concurrency.py`)
-Run the in-process 50-thread barrier benchmark directly inside the `booking_service` container against MySQL 8.0 (eliminates Gunicorn sync-worker HTTP queue distortion and audits `information_schema.INNODB_METRICS` `lock_deadlocks`):
+Run the in-process 50-thread barrier benchmark directly inside the `booking_service` container against MySQL 8.0 (eliminates Gunicorn sync-worker HTTP queue distortion, verifies outcome accounting, and audits `information_schema.INNODB_METRICS` `lock_deadlocks`):
 
 ```bash
 docker cp tests/bench_concurrency.py eventhive-booking:/app/bench_concurrency.py
@@ -48,7 +48,8 @@ docker compose exec booking_service python bench_concurrency.py --threads 50 --r
 ```
 
 ### Measured Results (50 Simultaneous Threads × 6 Rounds = 300 Attempts / Cell, MySQL 8.0.46)
-- **No Lock (`naive`):** `292 / 300` oversold seats (`single` scenario) and `586` oversold seat-assignments (`opposite` `[a, b]` / `[b, a]` scenario).
-- **Optimistic CAS (`optimistic_cas`):** `0` oversold seats, `0` deadlocks, `P95 = 80.8 ms` (`single`) / `81.0 ms` (`opposite`) / `100.6 ms` (`mixed`).
-- **Pessimistic Row-by-Row Unsorted (`pessimistic_unsorted_loop`):** `0` oversold seats, **`158` InnoDB deadlocks** in `opposite` (`[a, b]` vs. `[b, a]`) and **`37` deadlocks** in `mixed` (`P95 = 83.5 ms` / `105.6 ms`).
-- **EventHive Production (`pessimistic_production` — `select_for_update().order_by("id")` + retry):** **`0` oversold seats, `0` deadlocks, `P95 = 56.4 ms` (`single`) / `58.9 ms` (`opposite`) / `83.3 ms` (`mixed`)**.
+- **No Lock (`naive`):** `284 / 300` oversold seats (`single` scenario) and `586` oversold seat-assignments (`opposite` `[a, b]` / `[b, a]` scenario).
+- **Optimistic CAS (`optimistic_cas`):** `0` oversold seats, `0` deadlocks, `P95 = 75.1 ms` (`single`) / `96.5 ms` (`opposite`) / `116.2 ms` (`mixed`).
+- **Pessimistic Single `IN` Unsorted (`pessimistic_in_unsorted`):** `0` oversold seats, `0` deadlocks (`P95 = 48.8 ms` / `56.0 ms` / `82.5 ms`), confirming InnoDB scans primary keys in ascending index order.
+- **Pessimistic Row-by-Row Unsorted (`pessimistic_unsorted_loop`):** `0` oversold seats, **`151` InnoDB deadlocks** in `opposite` (`[a, b]` vs. `[b, a]`) and **`38` deadlocks** in `mixed` (`P95 = 82.4 ms` / `107.5 ms`).
+- **EventHive Production (`pessimistic_production` — `select_for_update().order_by("id")` + retry):** **`0` oversold seats, `0` deadlocks, `0` errors, `P95 = 57.2 ms` (`single`) / `67.5 ms` (`opposite`) / `77.1 ms` (`mixed`)**.
